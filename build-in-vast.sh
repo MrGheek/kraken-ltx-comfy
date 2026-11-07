@@ -66,9 +66,13 @@ fi
 
 # kaniko does not need a daemon or user namespaces. The amd64 executor is
 # published as a release asset so Vast hosts never need gcr.io access.
+TOOLS_TGZ_URL="${TOOLS_TGZ_URL:-https://codeload.github.com/MrGheek/kraken-tools/tar.gz/refs/heads/main}"
 if [ ! -x /usr/local/bin/kaniko ]; then
-  echo "[build] installing kaniko from repo"
-  install -m 0755 "$REPO_DIR/tools/kaniko-executor" /usr/local/bin/kaniko
+  echo "[build] downloading kaniko tools"
+  curl -fL --retry 2 --max-time 180 -o /tmp/tools.tar.gz "$TOOLS_TGZ_URL" || { echo "TOOLS_DOWNLOAD_FAILED"; exit 1; }
+  rm -rf /tmp/kraken-tools && mkdir -p /tmp/kraken-tools
+  tar -xzf /tmp/tools.tar.gz -C /tmp/kraken-tools --strip-components=1 || { echo "TOOLS_EXTRACT_FAILED"; exit 1; }
+  install -m 0755 /tmp/kraken-tools/kaniko-executor /usr/local/bin/kaniko || { echo "KANIKO_INSTALL_FAILED"; exit 1; }
 fi
 
 echo "[build] docker config (redacted):"
