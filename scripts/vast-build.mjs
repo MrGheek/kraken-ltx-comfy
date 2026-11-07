@@ -85,12 +85,10 @@ async function fetchGithubLog() {
   try {
     const { stdout } = await execFileAsync(
       "gh",
-      ["api", `repos/${LOG_REPO}/contents/latest.log`, "--jq", ".content"],
-      { timeout: 20000, maxBuffer: 10 * 1024 * 1024 },
+      ["api", "-H", "Accept: application/vnd.github.raw", `repos/${LOG_REPO}/contents/latest.log`],
+      { timeout: 20000, maxBuffer: 20 * 1024 * 1024 },
     );
-    const b64 = stdout.replace(/\s+/g, "");
-    if (!b64) return "";
-    return Buffer.from(b64, "base64").toString("utf8");
+    return stdout;
   } catch {
     return "";
   }
