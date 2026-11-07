@@ -266,15 +266,16 @@ while (Date.now() < deadline) {
         "-o", "ConnectTimeout=15",
         "-i", SSH_KEY,
       ];
-      console.log("[builder] uploading kaniko via scp");
+      console.log("[builder] uploading kaniko via ssh stdin");
+      const uploadCmd = `ssh ${sshOpts.map((x) => JSON.stringify(x)).join(" ")} -T -p ${inst.ssh_port} root@${inst.ssh_host} 'cat > /tmp/kaniko.gz' < ${JSON.stringify(KANIKO_GZ)}`;
       await execFileAsync(
-        "scp",
-        [...sshOpts, "-P", String(inst.ssh_port), KANIKO_GZ, `root@${inst.ssh_host}:/tmp/kaniko.gz`],
+        "sh",
+        ["-c", uploadCmd],
         { timeout: 300000, maxBuffer: 10 * 1024 * 1024 },
       );
       await execFileAsync(
         "ssh",
-        [...sshOpts, "-p", String(inst.ssh_port), `root@${inst.ssh_host}`,
+        [...sshOpts, "-T", "-p", String(inst.ssh_port), `root@${inst.ssh_host}`,
           "gunzip -c /tmp/kaniko.gz > /usr/local/bin/kaniko && chmod +x /usr/local/bin/kaniko && /usr/local/bin/kaniko version"],
         { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
       );
