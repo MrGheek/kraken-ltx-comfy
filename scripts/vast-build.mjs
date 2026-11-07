@@ -103,8 +103,6 @@ set -euo pipefail
 trap 'echo "BUILD_STATUS=failure $(date -u +%FT%TZ)"' ERR
 mkdir -p /workspace
 cd /workspace
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates
 exec > >(tee -a /workspace/build.log) 2>&1
 echo "BUILD_START $(date -u +%FT%TZ)"
 rm -rf /workspace/kraken-ltx-comfy
@@ -120,7 +118,7 @@ console.log(`[builder] offer ${offer.id} ${offer.gpu_name ?? ""} $${Number(offer
 const created = await vast(`/asks/${offer.id}/`, {
   method: "PUT",
   body: JSON.stringify({
-    image: "ubuntu:24.04",
+    image: "buildpack-deps:bookworm-scm",
     disk: DISK_GB,
     onstart,
     env: { GHCR_USER, GHCR_TOKEN, HF_TOKEN, IMAGE },
