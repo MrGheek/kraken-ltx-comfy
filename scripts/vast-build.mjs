@@ -94,6 +94,23 @@ async function fetchGithubLog() {
   }
 }
 
+async function resetGithubLog() {
+  try {
+    const { stdout } = await execFileAsync(
+      "gh",
+      ["api", `repos/${LOG_REPO}/contents/latest.log`, "--jq", ".sha"],
+      { timeout: 20000 },
+    );
+    const sha = stdout.trim();
+    if (!sha) return;
+    await execFileAsync(
+      "gh",
+      ["api", "--method", "DELETE", `repos/${LOG_REPO}/contents/latest.log`, "-f", "message=reset for new build", "-f", `sha=${sha}`],
+      { timeout: 20000 },
+    );
+  } catch {}
+}
+
 async function pickOffer() {
   if (process.env.OFFER_ID) return { id: Number(process.env.OFFER_ID), dph_total: NaN };
   const q = encodeURIComponent(JSON.stringify({
@@ -149,6 +166,8 @@ echo "BUILD_STATUS=success $(date -u +%FT%TZ)"
 
 const offer = await pickOffer();
 console.log(`[builder] offer ${offer.id} ${offer.gpu_name ?? ""} $${Number(offer.dph_total).toFixed(3)}/h disk=${offer.disk_space}GB up=${offer.inet_up}Mbps`);
+
+await resetGithubLog();
 
 const created = await vast(`/asks/${offer.id}/`, {
   method: "PUT",
@@ -254,7 +273,14 @@ while (Date.now() < deadline) {
   }
 
   const ghLog = await fetchGithubLog();
-  if (ghLog.length > logText.length) {
+  const ghStart = (ghLog.match(/BUILD_START (\S+)/) || [])[1];
+  const curStart = (logText.match(/BUILD_START (\S+)/) || [])[1];
+  if (ghLog && ghStart && ghStart !== curStart) {
+    logText = ghLog;
+    const banner = `\n--- new build ${ghStart} ---\n`;
+    fs.appendFileSync(LOG_PATH, banner + ghLog);
+    process.stdout.write(banner + ghLog);
+  } else if (ghLog.length > logText.length) {
     const chunk = ghLog.slice(logText.length);
     fs.appendFileSync(LOG_PATH, chunk);
     process.stdout.write(chunk);

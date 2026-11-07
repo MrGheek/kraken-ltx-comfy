@@ -73,6 +73,9 @@ if [ ! -x /usr/local/bin/kaniko ]; then
   chmod +x /usr/local/bin/kaniko
 fi
 
+echo "[build] docker config (redacted):"
+sed -E 's/("auth"|"password"):"[^"]*"/\1:"***"/g' /kaniko/.docker/config.json || true
+
 echo "[build] building and pushing $IMAGE with kaniko"
 /usr/local/bin/kaniko \
   --context="dir://$REPO_DIR" \
