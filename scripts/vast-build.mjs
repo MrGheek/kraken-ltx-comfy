@@ -1,0 +1,198 @@
+#!/usr/bin/env node
+/**
+ * Provisions a cheap Vast.ai builder, runs build-in-vast.sh, streams the
+ * build log over a temporary HTTP server, saves the log, and destroys the
+ * instance. The GPU is not used for rendering; it only provides a linux/amd64
+ * container with disk and bandwidth.
+ *
+ * Required env:
+ *   VAST_API_KEY, GHCR_USER, GHCR_TOKEN, HF_TOKEN
+ * Optional:
+ *   IMAGE, DISK_GB, OFFER_ID, KEEP_INSTANCE=1
+ */
+import fs from "node:fs";
+
+const VAST = "https://console.vast.ai/api/v0";
+const VAST_API_KEY = process.env.VAST_API_KEY;
+const GHCR_USER = process.env.GHCR_USER || "MrGheek";
+const GHCR_TOKEN = process.env.GHCR_TOKEN;
+const HF_TOKEN = process.env.HF_TOKEN;
+const IMAGE = process.env.IMAGE || "ghcr.io/mrgheek/kraken-ltx-comfy:latest";
+const DISK_GB = Number(process.env.DISK_GB || 120);
+const PORT = 8080;
+const LOG_PATH = process.env.LOG_PATH || "/tmp/ltx-build.log";
+
+if (!VAST_API_KEY || !GHCR_TOKEN || !HF_TOKEN) {
+  console.error("Missing VAST_API_KEY, GHCR_TOKEN, or HF_TOKEN");
+  process.exit(1);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function vast(path, opts = {}) {
+  const res = await fetch(`${VAST}${path}`, {
+    ...opts,
+    headers: {
+      Authorization: `Bearer ${VAST_API_KEY}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...(opts.headers || {}),
+    },
+    signal: AbortSignal.timeout(60000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Vast ${path} ${res.status}: ${text.slice(0, 300)}`);
+  return text ? JSON.parse(text) : {};
+}
+
+function unwrap(d) {
+  if (!d) return null;
+  if (Array.isArray(d)) return d[0] || null;
+  if (d.instances) return Array.isArray(d.instances) ? d.instances[0] || null : d.instances;
+  return d;
+}
+
+async function getInstance(id) {
+  try {
+    const inst = unwrap(await vast(`/instances/${id}/`));
+    if (inst && inst.id) return inst;
+  } catch {}
+  const list = await vast(`/instances/`);
+  const arr = list?.instances ?? list;
+  return (Array.isArray(arr) ? arr : []).find((x) => String(x.id) === String(id)) || null;
+}
+
+function resolvePort(inst, port) {
+  const p = inst?.ports?.[`${port}/tcp`] || inst?.ports?.[`${port}/http`] || inst?.ports?.[String(port)];
+  if (Array.isArray(p) && p[0]?.HostPort) return Number(p[0].HostPort);
+  if (p && typeof p === "object" && p.HostPort) return Number(p.HostPort);
+  const dps = Number(inst?.direct_port_start);
+  const dpe = Number(inst?.direct_port_end);
+  if (dps > 0 && dpe >= dps) return port >= dps && port <= dpe ? port : dps;
+  return port;
+}
+
+async function pickOffer() {
+  if (process.env.OFFER_ID) return { id: Number(process.env.OFFER_ID), dph_total: NaN };
+  const q = encodeURIComponent(JSON.stringify({
+    rentable: { eq: true },
+    type: "on-demand",
+    num_gpus: { gte: 1 },
+    disk_space: { gte: DISK_GB },
+    dph_total: { lte: 0.30 },
+  }));
+  const data = await vast(`/bundles/?q=${q}`);
+  const offers = (data?.offers ?? [])
+    .filter((o) => (o.reliability ?? 0) >= 0.98 && (o.inet_up ?? 0) >= 300)
+    .sort((a, b) => a.dph_total - b.dph_total);
+  if (offers.length === 0) throw new Error("No suitable builder offers");
+  return offers[0];
+}
+
+const onstart = `#!/bin/bash
+set -euo pipefail
+trap 'echo "BUILD_STATUS=failure $(date -u +%FT%TZ)"' ERR
+mkdir -p /workspace
+cd /workspace
+apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates python3
+python3 -m http.server ${PORT} --directory /workspace >/workspace/http.log 2>&1 &
+exec > >(tee -a /workspace/build.log) 2>&1
+echo "BUILD_START $(date -u +%FT%TZ)"
+rm -rf /workspace/kraken-ltx-comfy
+git clone --depth 1 https://github.com/MrGheek/kraken-ltx-comfy.git /workspace/kraken-ltx-comfy
+cd /workspace/kraken-ltx-comfy
+bash build-in-vast.sh
+echo "BUILD_STATUS=success $(date -u +%FT%TZ)"
+`;
+
+const offer = await pickOffer();
+console.log(`[builder] offer ${offer.id} ${offer.gpu_name ?? ""} $${Number(offer.dph_total).toFixed(3)}/h disk=${offer.disk_space}GB up=${offer.inet_up}Mbps`);
+
+const created = await vast(`/asks/${offer.id}/`, {
+  method: "PUT",
+  body: JSON.stringify({
+    image: "ubuntu:24.04",
+    disk: DISK_GB,
+    onstart,
+    env: { GHCR_USER, GHCR_TOKEN, HF_TOKEN, IMAGE },
+    ports: { [`${PORT}/http`]: PORT },
+  }),
+});
+
+const id = created?.new_contract ?? created?.instance_id ?? created?.id;
+if (!id) throw new Error(`No instance id in response: ${JSON.stringify(created).slice(0, 300)}`);
+console.log(`[builder] instance ${id} created`);
+
+let ip = null;
+let hostPort = null;
+let lastStatus = "";
+const deadline = Date.now() + 100 * 60_000;
+let logText = "";
+fs.writeFileSync(LOG_PATH, "");
+
+while (Date.now() < deadline) {
+  let inst = null;
+  try {
+    inst = await getInstance(id);
+  } catch (err) {
+    console.log(`[builder] getInstance: ${err.message}`);
+  }
+
+  if (inst) {
+    const status = inst.actual_status ?? "unknown";
+    if (status !== lastStatus) {
+      console.log(`[builder] status=${status} msg=${String(inst.status_msg ?? "").replace(/\n/g, " ").slice(-120)}`);
+      lastStatus = status;
+    }
+    if (!ip && inst.public_ipaddr) ip = inst.public_ipaddr;
+    const p = resolvePort(inst, PORT);
+    if (p > 0) hostPort = p;
+    if (["exited", "stopped", "destroyed"].includes(status) && !logText) {
+      console.log("[builder] instance exited before producing a log");
+      break;
+    }
+  }
+
+  if (ip && hostPort) {
+    try {
+      const res = await fetch(`http://${ip}:${hostPort}/build.log`, { signal: AbortSignal.timeout(20000) });
+      if (res.ok) {
+        const text = await res.text();
+        if (text.length > logText.length) {
+          const chunk = text.slice(logText.length);
+          fs.appendFileSync(LOG_PATH, chunk);
+          process.stdout.write(chunk);
+          logText = text;
+        }
+        if (logText.includes("BUILD_STATUS=")) {
+          console.log(`\n[builder] log saved to ${LOG_PATH}`);
+          break;
+        }
+      }
+    } catch {
+      // log server not ready yet
+    }
+  }
+
+  await sleep(15000);
+}
+
+const success = logText.includes("BUILD_STATUS=success");
+console.log(`[builder] result: ${success ? "SUCCESS" : "FAILURE/UNKNOWN"}`);
+if (!success) {
+  console.log(`[builder] last log lines:\n${logText.slice(-3000)}`);
+}
+
+if (process.env.KEEP_INSTANCE === "1") {
+  console.log(`[builder] keeping instance ${id} (KEEP_INSTANCE=1)`);
+} else {
+  try {
+    await vast(`/instances/${id}/`, { method: "DELETE" });
+    console.log(`[builder] destroyed instance ${id}`);
+  } catch (err) {
+    console.log(`[builder] destroy failed: ${err.message}`);
+  }
+}
+
+process.exit(success ? 0 : 1);

@@ -32,16 +32,13 @@ cat > ~/.config/containers/auth.json <<EOF
 {"auths":{"ghcr.io":{"auth":"$AUTH"}}}
 EOF
 
-TOKEN_FILE="$(mktemp)"
-echo "$HF_TOKEN" > "$TOKEN_FILE"
-trap 'rm -f "$TOKEN_FILE"' EXIT
-
 echo "[build] building $IMAGE with buildah (chroot/vfs)"
 buildah --storage-driver vfs bud \
   --format docker \
   --layers \
   --isolation chroot \
-  --secret id=hf_token,src="$TOKEN_FILE" \
+  --build-arg HF_TOKEN="$HF_TOKEN" \
+  -f Dockerfile.buildah \
   -t "$IMAGE" \
   .
 
