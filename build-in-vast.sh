@@ -62,26 +62,13 @@ if [ "$BUILDER" = "buildah" ]; then
   exit 0
 fi
 
-# kaniko does not need a daemon or user namespaces.
+# kaniko does not need a daemon or user namespaces. The amd64 executor is
+# published as a release asset so Vast hosts never need gcr.io access.
+KANIKO_URL="${KANIKO_URL:-https://github.com/MrGheek/kraken-ltx-comfy/releases/download/tools-v1/kaniko-executor}"
 if [ ! -x /usr/local/bin/kaniko ]; then
-  echo "[build] fetching crane + kaniko executor"
-  if [ ! -x /usr/local/bin/crane ]; then
-    curl -sL -o /tmp/crane.tar.gz \
-      https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz
-    tar -xzf /tmp/crane.tar.gz -C /tmp crane
-    install -m 0755 /tmp/crane /usr/local/bin/crane
-  fi
-  rm -rf /tmp/kaniko-root
-  mkdir -p /tmp/kaniko-root
-  export DOCKER_CONFIG=/kaniko/.docker
-  /usr/local/bin/crane export "$KANIKO_IMAGE" - \
-    | tar -xf - -C /tmp/kaniko-root
-  EXECUTOR="$(find /tmp/kaniko-root -type f -name executor | head -1)"
-  if [ -z "$EXECUTOR" ]; then
-    echo "[build] FATAL: kaniko executor not found in exported image" >&2
-    exit 1
-  fi
-  install -m 0755 "$EXECUTOR" /usr/local/bin/kaniko
+  echo "[build] downloading kaniko executor"
+  curl -fL --retry 3 --max-time 300 -o /usr/local/bin/kaniko "$KANIKO_URL"
+  chmod +x /usr/local/bin/kaniko
 fi
 
 echo "[build] building and pushing $IMAGE with kaniko"
