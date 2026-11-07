@@ -111,8 +111,8 @@ async function resetGithubLog() {
   } catch {}
 }
 
-async function pickOffer() {
-  if (process.env.OFFER_ID) return { id: Number(process.env.OFFER_ID), dph_total: NaN };
+async function pickOffers() {
+  if (process.env.OFFER_ID) return [{ id: Number(process.env.OFFER_ID), dph_total: NaN }];
   const q = encodeURIComponent(JSON.stringify({
     rentable: { eq: true },
     type: "on-demand",
@@ -126,7 +126,7 @@ async function pickOffer() {
     .filter((o) => !/V100/i.test(o.gpu_name ?? ""))
     .sort((a, b) => a.dph_total - b.dph_total);
   if (offers.length === 0) throw new Error("No suitable builder offers");
-  return offers[0];
+  return offers.slice(0, 6);
 }
 
 const onstart = `#!/bin/bash
@@ -165,25 +165,35 @@ bash build-in-vast.sh
 echo "BUILD_STATUS=success $(date -u +%FT%TZ)"
 `;
 
-const offer = await pickOffer();
-console.log(`[builder] offer ${offer.id} ${offer.gpu_name ?? ""} $${Number(offer.dph_total).toFixed(3)}/h disk=${offer.disk_space}GB up=${offer.inet_up}Mbps`);
-
+const offers = await pickOffers();
 await resetGithubLog();
 
-const created = await vast(`/asks/${offer.id}/`, {
-  method: "PUT",
-  body: JSON.stringify({
-    image: "buildpack-deps:bookworm-scm",
-    disk: DISK_GB,
-    onstart,
-    env: { GHCR_USER, GHCR_TOKEN, HF_TOKEN, IMAGE },
-    ports: { [`${PORT}/http`]: PORT },
-  }),
-});
+let offer = null;
+let created = null;
+for (const candidate of offers) {
+  try {
+    console.log(`[builder] trying offer ${candidate.id} ${candidate.gpu_name ?? ""} $${Number(candidate.dph_total).toFixed(3)}/h`);
+    created = await vast(`/asks/${candidate.id}/`, {
+      method: "PUT",
+      body: JSON.stringify({
+        image: "buildpack-deps:bookworm-scm",
+        disk: DISK_GB,
+        onstart,
+        env: { GHCR_USER, GHCR_TOKEN, HF_TOKEN, IMAGE },
+        ports: { [`${PORT}/http`]: PORT },
+      }),
+    });
+    offer = candidate;
+    break;
+  } catch (err) {
+    console.log(`[builder] offer ${candidate.id} unavailable: ${err.message}`);
+  }
+}
 
+if (!created || !offer) throw new Error("Could not create a builder instance from any offer");
 const id = created?.new_contract ?? created?.instance_id ?? created?.id;
 if (!id) throw new Error(`No instance id in response: ${JSON.stringify(created).slice(0, 300)}`);
-console.log(`[builder] instance ${id} created`);
+console.log(`[builder] instance ${id} created on offer ${offer.id} ${offer.gpu_name ?? ""}`);
 
 let ip = null;
 let hostPort = null;
