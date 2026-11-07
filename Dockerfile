@@ -35,7 +35,7 @@ RUN set -eux; \
     ND="$CD/custom_nodes/ComfyUI_essentials"; \
     if [ ! -d "$ND" ]; then git clone --depth 1 https://github.com/cubiq/ComfyUI_essentials.git "$ND"; fi; \
     if [ -f "$ND/requirements.txt" ]; then \
-      python3 -m pip install --no-cache-dir -r "$ND/requirements.txt"; \
+      python3 -m pip install --no-cache-dir -r "$ND/requirements.txt" 2>&1 | tail -5 || true; \
     fi
 
 # Each component is its own layer to stay under registry layer limits.
