@@ -11,6 +11,7 @@
  *   IMAGE, DISK_GB, OFFER_ID, KEEP_INSTANCE=1
  */
 import fs from "node:fs";
+import zlib from "node:zlib";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -30,6 +31,8 @@ const PORT = 8080;
 const LOG_PATH = process.env.LOG_PATH || "/tmp/ltx-build.log";
 const STALL_MS = Number(process.env.STALL_MINUTES || 15) * 60_000;
 const SSH_KEY = process.env.SSH_KEY || path.join(os.homedir(), ".ssh", "id_ed25519");
+const KANIKO_BIN = process.env.KANIKO_BIN || "/tmp/kaniko-executor";
+const KANIKO_GZ = "/tmp/kaniko.gz";
 
 if (!VAST_API_KEY || !GHCR_TOKEN || !HF_TOKEN) {
   console.error("Missing VAST_API_KEY, GHCR_TOKEN, or HF_TOKEN");
@@ -200,6 +203,7 @@ let hostPort = null;
 let lastStatus = "";
 const deadline = Date.now() + 75 * 60_000;
 let logText = "";
+let kanikoUploaded = false;
 let lastLogAt = Date.now();
 let lastLogLen = 0;
 let stalled = false;
@@ -250,6 +254,37 @@ while (Date.now() < deadline) {
   }
 
   // Prefer SSH: Vast does not expose arbitrary HTTP ports on this image.
+  if (!kanikoUploaded && inst?.ssh_host && inst?.ssh_port && lastStatus === "running") {
+    try {
+      if (!fs.existsSync(KANIKO_GZ)) {
+        fs.writeFileSync(KANIKO_GZ, zlib.gzipSync(fs.readFileSync(KANIKO_BIN)));
+      }
+      const sshOpts = [
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=15",
+        "-i", SSH_KEY,
+      ];
+      console.log("[builder] uploading kaniko via scp");
+      await execFileAsync(
+        "scp",
+        [...sshOpts, "-P", String(inst.ssh_port), KANIKO_GZ, `root@${inst.ssh_host}:/tmp/kaniko.gz`],
+        { timeout: 300000, maxBuffer: 10 * 1024 * 1024 },
+      );
+      await execFileAsync(
+        "ssh",
+        [...sshOpts, "-p", String(inst.ssh_port), `root@${inst.ssh_host}`,
+          "gunzip -c /tmp/kaniko.gz > /usr/local/bin/kaniko && chmod +x /usr/local/bin/kaniko && /usr/local/bin/kaniko version"],
+        { timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
+      );
+      kanikoUploaded = true;
+      console.log("[builder] kaniko uploaded and installed");
+    } catch (err) {
+      console.log(`[builder] kaniko upload failed: ${err.message}`);
+    }
+  }
+
   if (inst?.ssh_host && inst?.ssh_port) {
     if (lastStatus === "running") {
       try {
