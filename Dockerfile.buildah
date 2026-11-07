@@ -1,66 +1,64 @@
 # syntax=docker/dockerfile:1.7
 #
-# Pre-baked LTX-2.5 ComfyUI worker for Kraken Studios.
+# LTX-2.5 ComfyUI worker image — kaniko/buildah variant.
 #
-# This image is intended to be built and pushed to a PRIVATE registry. LTX-2.5
-# weights are gated and distributed under the LTX-2.x Community License; do not
-# publish this image or its weights publicly without reviewing the LICENSE.
+# Uses a small CUDA base + a pinned ComfyUI commit instead of the large
+# vastai/comfy image. Pass HF_TOKEN as a build arg (masked in logs by kaniko).
 #
-# Build requires linux/amd64 and >= 80 GB free disk (~40 GB final image).
-# GitHub-hosted runners generally do not have enough disk; use a Vast.ai
-# instance or a self-hosted runner.
-#
-# Model pack: Lightricks/LTX-2.5 (ComfyUI int8 variants)
-FROM vastai/comfy:v0.18.2-cuda-12.9-py312
+# Build requires linux/amd64 and >= 80 GB free disk (~45-50 GB final image).
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
 
-# Buildah variant: pass HF_TOKEN as a masked build arg (no BuildKit secret mount).
 ARG HF_TOKEN
+ARG COMFY_REF=1332fabfcc507aa7c548cd5152071ed494c207e8
 
 ENV DEBIAN_FRONTEND=noninteractive \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
+    COMFY_DIR=/opt/ComfyUI \
     COMFY_PORT=9188 \
     WORKER_PORT=8188
 
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
-        git ffmpeg curl ca-certificates && \
+        git python3 python3-pip python3-venv \
+        ffmpeg libgl1 libglib2.0-0 curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-RUN if [ -d /opt/ComfyUI ]; then ln -sfn /opt/ComfyUI /comfyui; \
-    elif [ -d /workspace/ComfyUI ]; then ln -sfn /workspace/ComfyUI /comfyui; \
-    else echo "FATAL: ComfyUI not found in base image" >&2; exit 1; fi
+# CUDA PyTorch first; ComfyUI requirements list bare `torch`, so pip keeps it.
+RUN python3 -m pip install --no-cache-dir --upgrade pip && \
+    python3 -m pip install --no-cache-dir \
+        torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/cu128
 
-RUN python3 -m pip install --no-cache-dir "huggingface_hub[cli]" hf_transfer
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI && \
+    cd /opt/ComfyUI && \
+    git checkout "$COMFY_REF" && \
+    python3 -m pip install --no-cache-dir -r requirements.txt
+
+RUN ln -sfn /opt/ComfyUI /comfyui && \
+    python3 -m pip install --no-cache-dir "huggingface_hub[cli]" hf_transfer
 
 # ETN_LoadImageBase64 (I2V conditioning) comes from ComfyUI_essentials.
-RUN set -eux; \
-    CD=/comfyui; \
-    ND="$CD/custom_nodes/ComfyUI_essentials"; \
-    if [ ! -d "$ND" ]; then git clone --depth 1 https://github.com/cubiq/ComfyUI_essentials.git "$ND"; fi; \
-    if [ -f "$ND/requirements.txt" ]; then \
-      python3 -m pip install --no-cache-dir -r "$ND/requirements.txt" 2>&1 | tail -5 || true; \
-    fi
+RUN git clone --depth 1 https://github.com/cubiq/ComfyUI_essentials.git \
+      /opt/ComfyUI/custom_nodes/ComfyUI_essentials && \
+    (python3 -m pip install --no-cache-dir \
+      -r /opt/ComfyUI/custom_nodes/ComfyUI_essentials/requirements.txt 2>&1 | tail -5 || true)
 
-# Each component is its own layer to stay under registry layer limits.
-# The HF token is a BuildKit secret and is never persisted in an image layer.
-RUN \
-    mkdir -p /comfyui/models/diffusion_models && \
+# LTX-2.5 ComfyUI int8 pack. Each component is its own layer.
+RUN mkdir -p /comfyui/models/diffusion_models && \
     HF_TOKEN="$HF_TOKEN" \
     python3 -m huggingface_hub.commands.huggingface_cli download \
       Lightricks/LTX-2.5 \
       --local-dir /comfyui/models \
       --include "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
 
-RUN \
-    mkdir -p /comfyui/models/text_encoders && \
+RUN mkdir -p /comfyui/models/text_encoders && \
     HF_TOKEN="$HF_TOKEN" \
     python3 -m huggingface_hub.commands.huggingface_cli download \
       Lightricks/LTX-2.5 \
       --local-dir /comfyui/models \
       --include "text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
 
-RUN \
-    mkdir -p /comfyui/models/vae && \
+RUN mkdir -p /comfyui/models/vae && \
     HF_TOKEN="$HF_TOKEN" \
     python3 -m huggingface_hub.commands.huggingface_cli download \
       Lightricks/LTX-2.5 \
@@ -68,8 +66,7 @@ RUN \
       --include "vae/ltx-2.5-video-vae-bf16.safetensors" \
       --include "vae/ltx-2.5-audio-vae-bf16.safetensors"
 
-RUN \
-    mkdir -p /comfyui/models/latent_upscale_models /comfyui/models/model_patches && \
+RUN mkdir -p /comfyui/models/latent_upscale_models /comfyui/models/model_patches && \
     HF_TOKEN="$HF_TOKEN" \
     python3 -m huggingface_hub.commands.huggingface_cli download \
       Lightricks/LTX-2.5 \
