@@ -11,6 +11,12 @@
  *   IMAGE, DISK_GB, OFFER_ID, KEEP_INSTANCE=1
  */
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const VAST = "https://console.vast.ai/api/v0";
 const VAST_API_KEY = process.env.VAST_API_KEY;
@@ -21,6 +27,7 @@ const IMAGE = process.env.IMAGE || "ghcr.io/mrgheek/kraken-ltx-comfy:latest";
 const DISK_GB = Number(process.env.DISK_GB || 120);
 const PORT = 8080;
 const LOG_PATH = process.env.LOG_PATH || "/tmp/ltx-build.log";
+const SSH_KEY = process.env.SSH_KEY || path.join(os.homedir(), ".ssh", "id_ed25519");
 
 if (!VAST_API_KEY || !GHCR_TOKEN || !HF_TOKEN) {
   console.error("Missing VAST_API_KEY, GHCR_TOKEN, or HF_TOKEN");
@@ -172,6 +179,40 @@ while (Date.now() < deadline) {
       }
     } catch {
       // log server not ready yet
+    }
+  }
+
+  // Prefer SSH: Vast does not expose arbitrary HTTP ports on this image.
+  if (inst?.ssh_host && inst?.ssh_port) {
+    if (lastStatus === "running") {
+      try {
+        const cmd = `tail -c +${logText.length + 1} /workspace/build.log 2>/dev/null || true`;
+        const { stdout } = await execFileAsync(
+          "ssh",
+          [
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ConnectTimeout=10",
+            "-i", SSH_KEY,
+            "-p", String(inst.ssh_port),
+            `root@${inst.ssh_host}`,
+            cmd,
+          ],
+          { timeout: 30000, maxBuffer: 10 * 1024 * 1024 },
+        );
+        if (stdout.length > 0) {
+          fs.appendFileSync(LOG_PATH, stdout);
+          process.stdout.write(stdout);
+          logText += stdout;
+          if (logText.includes("BUILD_STATUS=")) {
+            console.log(`\n[builder] log saved to ${LOG_PATH}`);
+            break;
+          }
+        }
+      } catch {
+        // SSH not ready yet or key not injected
+      }
     }
   }
 
