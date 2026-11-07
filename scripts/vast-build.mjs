@@ -138,11 +138,6 @@ mkdir -p /workspace
 cd /workspace
 exec > >(tee -a /workspace/build.log) 2>&1
 echo "BUILD_START $(date -u +%FT%TZ)"
-echo "CLONE_MAIN"
-rm -rf /workspace/kraken-ltx-comfy
-git clone --depth 1 https://github.com/MrGheek/kraken-ltx-comfy.git /workspace/kraken-ltx-comfy
-echo "CLONE_MAIN_DONE"
-cd /workspace/kraken-ltx-comfy
 (
   LOG_REPO_URL="https://$GHCR_USER:$GHCR_TOKEN@github.com/${LOG_REPO}.git"
   rm -rf /tmp/logrepo
@@ -159,6 +154,12 @@ cd /workspace/kraken-ltx-comfy
     sleep 45
   done
 ) &
+echo "CLONE_MAIN"
+rm -rf /workspace/kraken-ltx-comfy
+timeout 300 git clone --depth 1 --progress https://github.com/MrGheek/kraken-ltx-comfy.git /workspace/kraken-ltx-comfy || { echo "CLONE_MAIN_FAILED"; exit 1; }
+echo "CLONE_MAIN_DONE"
+cd /workspace/kraken-ltx-comfy
+
 echo "BUILD_SCRIPT_START"
 bash build-in-vast.sh
 echo "BUILD_STATUS=success $(date -u +%FT%TZ)"
