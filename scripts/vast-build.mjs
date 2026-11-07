@@ -24,6 +24,7 @@ const GHCR_USER = process.env.GHCR_USER || "MrGheek";
 const GHCR_TOKEN = process.env.GHCR_TOKEN;
 const HF_TOKEN = process.env.HF_TOKEN;
 const IMAGE = process.env.IMAGE || "ghcr.io/mrgheek/kraken-ltx-comfy:latest";
+const LOG_REPO = process.env.LOG_REPO || "MrGheek/kraken-build-logs";
 const DISK_GB = Number(process.env.DISK_GB || 120);
 const PORT = 8080;
 const LOG_PATH = process.env.LOG_PATH || "/tmp/ltx-build.log";
@@ -80,6 +81,21 @@ function resolvePort(inst, port) {
   return port;
 }
 
+async function fetchGithubLog() {
+  try {
+    const { stdout } = await execFileAsync(
+      "gh",
+      ["api", `repos/${LOG_REPO}/contents/latest.log`, "--jq", ".content"],
+      { timeout: 20000, maxBuffer: 10 * 1024 * 1024 },
+    );
+    const b64 = stdout.replace(/\s+/g, "");
+    if (!b64) return "";
+    return Buffer.from(b64, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
 async function pickOffer() {
   if (process.env.OFFER_ID) return { id: Number(process.env.OFFER_ID), dph_total: NaN };
   const q = encodeURIComponent(JSON.stringify({
@@ -105,6 +121,24 @@ mkdir -p /workspace
 cd /workspace
 exec > >(tee -a /workspace/build.log) 2>&1
 echo "BUILD_START $(date -u +%FT%TZ)"
+LOG_REPO_URL="https://x-access-token:$GHCR_TOKEN@github.com/${LOG_REPO}.git"
+rm -rf /tmp/logrepo
+git clone --depth 1 "$LOG_REPO_URL" /tmp/logrepo >/dev/null 2>&1 || {
+  mkdir -p /tmp/logrepo && cd /tmp/logrepo && git init -b main >/dev/null 2>&1 && git remote add origin "$LOG_REPO_URL" >/dev/null 2>&1 && cd /workspace
+}
+(
+  while true; do
+    if [ -f /workspace/build.log ]; then
+      sed -E 's/(hf_|ghp_)[A-Za-z0-9]+/\1***/g' /workspace/build.log > /tmp/logrepo/latest.log 2>/dev/null || true
+    fi
+    cd /tmp/logrepo 2>/dev/null || exit 0
+    git add latest.log >/dev/null 2>&1 || true
+    git -c user.name=kraken-builder -c user.email=builder@kraken.local commit -m "log $(date -u +%FT%TZ)" >/dev/null 2>&1 || true
+    git push >/dev/null 2>&1 || true
+    cd /workspace
+    sleep 45
+  done
+) &
 rm -rf /workspace/kraken-ltx-comfy
 git clone --depth 1 https://github.com/MrGheek/kraken-ltx-comfy.git /workspace/kraken-ltx-comfy
 cd /workspace/kraken-ltx-comfy
@@ -216,6 +250,14 @@ while (Date.now() < deadline) {
         // SSH not ready yet or key not injected
       }
     }
+  }
+
+  const ghLog = await fetchGithubLog();
+  if (ghLog.length > logText.length) {
+    const chunk = ghLog.slice(logText.length);
+    fs.appendFileSync(LOG_PATH, chunk);
+    process.stdout.write(chunk);
+    logText = ghLog;
   }
 
   if (logText.length !== lastLogLen) {
