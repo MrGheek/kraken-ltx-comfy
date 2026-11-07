@@ -132,7 +132,7 @@ cd /workspace/kraken-ltx-comfy
   timeout 60 git clone --depth 1 "$LOG_REPO_URL" /tmp/logrepo >/dev/null 2>&1 || exit 0
   while true; do
     if [ -f /workspace/build.log ]; then
-      sed -E 's/(hf_|ghp_)[A-Za-z0-9]+/\1***/g' /workspace/build.log > /tmp/logrepo/latest.log 2>/dev/null || true
+      sed -E 's/(hf_|ghp_)[A-Za-z0-9]+/\\1***/g' /workspace/build.log > /tmp/logrepo/latest.log 2>/dev/null || true
     fi
     cd /tmp/logrepo 2>/dev/null || exit 0
     git add latest.log >/dev/null 2>&1 || true
