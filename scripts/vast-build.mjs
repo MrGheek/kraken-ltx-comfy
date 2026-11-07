@@ -27,6 +27,7 @@ const IMAGE = process.env.IMAGE || "ghcr.io/mrgheek/kraken-ltx-comfy:latest";
 const DISK_GB = Number(process.env.DISK_GB || 120);
 const PORT = 8080;
 const LOG_PATH = process.env.LOG_PATH || "/tmp/ltx-build.log";
+const STALL_MS = Number(process.env.STALL_MINUTES || 15) * 60_000;
 const SSH_KEY = process.env.SSH_KEY || path.join(os.homedir(), ".ssh", "id_ed25519");
 
 if (!VAST_API_KEY || !GHCR_TOKEN || !HF_TOKEN) {
@@ -134,8 +135,11 @@ console.log(`[builder] instance ${id} created`);
 let ip = null;
 let hostPort = null;
 let lastStatus = "";
-const deadline = Date.now() + 100 * 60_000;
+const deadline = Date.now() + 75 * 60_000;
 let logText = "";
+let lastLogAt = Date.now();
+let lastLogLen = 0;
+let stalled = false;
 fs.writeFileSync(LOG_PATH, "");
 
 while (Date.now() < deadline) {
@@ -216,10 +220,25 @@ while (Date.now() < deadline) {
     }
   }
 
+  if (logText.length !== lastLogLen) {
+    lastLogLen = logText.length;
+    lastLogAt = Date.now();
+  }
+  if (logText.length > 0 && Date.now() - lastLogAt > STALL_MS) {
+    console.log(`[builder] STALL: no log progress for ${Math.round((Date.now() - lastLogAt) / 60000)}m; aborting`);
+    stalled = true;
+    break;
+  }
+  if (logText.length === 0 && lastStatus === "running" && Date.now() - lastLogAt > STALL_MS) {
+    console.log(`[builder] STALL: no log after ${Math.round((Date.now() - lastLogAt) / 60000)}m; aborting`);
+    stalled = true;
+    break;
+  }
+
   await sleep(15000);
 }
 
-const success = logText.includes("BUILD_STATUS=success");
+const success = !stalled && logText.includes("BUILD_STATUS=success");
 console.log(`[builder] result: ${success ? "SUCCESS" : "FAILURE/UNKNOWN"}`);
 if (!success) {
   console.log(`[builder] last log lines:\n${logText.slice(-3000)}`);
