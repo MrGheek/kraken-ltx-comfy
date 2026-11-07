@@ -35,10 +35,12 @@ fi
 cd "$REPO_DIR"
 
 AUTH="$(printf '%s:%s' "$GHCR_USER" "$GHCR_TOKEN" | base64 -w0)"
-mkdir -p /kaniko/.docker ~/.config/containers
+mkdir -p /kaniko/.docker /root/.docker ~/.config/containers
 cat > /kaniko/.docker/config.json <<EOF
 {"auths":{"ghcr.io":{"username":"$GHCR_USER","password":"$GHCR_TOKEN","auth":"$AUTH"}}}
 EOF
+cp /kaniko/.docker/config.json /root/.docker/config.json
+export DOCKER_CONFIG=/kaniko/.docker
 cat > ~/.config/containers/auth.json <<EOF
 {"auths":{"ghcr.io":{"auth":"$AUTH"}}}
 EOF
