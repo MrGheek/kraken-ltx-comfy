@@ -5,9 +5,6 @@
 # Required env:
 #   GHCR_USER, GHCR_TOKEN   (write:packages)
 #   HF_TOKEN                (accepted Lightricks/LTX-2.5 access)
-#
-# Usage on the builder instance:
-#   GHCR_USER=... GHCR_TOKEN=... HF_TOKEN=... ./build-in-vast.sh
 set -euo pipefail
 
 : "${GHCR_USER:?set GHCR_USER}"
@@ -16,15 +13,18 @@ set -euo pipefail
 
 IMAGE="${IMAGE:-ghcr.io/mrgheek/kraken-ltx-comfy:latest}"
 REPO="${REPO:-https://github.com/MrGheek/kraken-ltx-comfy.git}"
+REPO_DIR="${REPO_DIR:-/workspace/kraken-ltx-comfy}"
 
-if ! command -v buildah >/dev/null 2>&1; then
+if ! command -v git >/dev/null 2>&1 || ! command -v buildah >/dev/null 2>&1; then
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates buildah
 fi
 
-rm -rf /workspace/kraken-ltx-comfy
-git clone --depth 1 "$REPO" /workspace/kraken-ltx-comfy
-cd /workspace/kraken-ltx-comfy
+if [ ! -d "$REPO_DIR/.git" ]; then
+  mkdir -p "$(dirname "$REPO_DIR")"
+  git clone --depth 1 "$REPO" "$REPO_DIR"
+fi
+cd "$REPO_DIR"
 
 mkdir -p ~/.config/containers
 AUTH="$(printf '%s:%s' "$GHCR_USER" "$GHCR_TOKEN" | base64 -w0)"
