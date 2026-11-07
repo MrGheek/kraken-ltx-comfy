@@ -20,7 +20,7 @@ REPO_DIR="${REPO_DIR:-/workspace/kraken-ltx-comfy}"
 BUILDER="${BUILDER:-kaniko}"
 
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates skopeo jq
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar
 
 if [ ! -d "$REPO_DIR/.git" ]; then
   mkdir -p "$(dirname "$REPO_DIR")"
@@ -58,16 +58,20 @@ fi
 
 # kaniko does not need a daemon or user namespaces.
 if [ ! -x /usr/local/bin/kaniko ]; then
-  echo "[build] fetching kaniko executor"
-  rm -rf /tmp/kaniko /tmp/kaniko-root
-  skopeo copy docker://gcr.io/kaniko-project/executor:debug dir:/tmp/kaniko
+  echo "[build] fetching crane + kaniko executor"
+  if [ ! -x /usr/local/bin/crane ]; then
+    curl -sL -o /tmp/crane.tar.gz \
+      https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz
+    tar -xzf /tmp/crane.tar.gz -C /tmp crane
+    install -m 0755 /tmp/crane /usr/local/bin/crane
+  fi
+  rm -rf /tmp/kaniko-root
   mkdir -p /tmp/kaniko-root
-  for layer in $(jq -r '.layers[].digest' /tmp/kaniko/manifest.json); do
-    tar -xf "/tmp/kaniko/blobs/sha256/${layer#sha256:}" -C /tmp/kaniko-root 2>/dev/null || true
-  done
+  /usr/local/bin/crane export gcr.io/kaniko-project/executor:debug - \
+    | tar -xf - -C /tmp/kaniko-root
   EXECUTOR="$(find /tmp/kaniko-root -type f -name executor | head -1)"
   if [ -z "$EXECUTOR" ]; then
-    echo "[build] FATAL: kaniko executor not found in extracted image" >&2
+    echo "[build] FATAL: kaniko executor not found in exported image" >&2
     exit 1
   fi
   install -m 0755 "$EXECUTOR" /usr/local/bin/kaniko
