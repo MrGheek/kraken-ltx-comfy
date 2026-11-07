@@ -20,8 +20,13 @@ REPO_DIR="${REPO_DIR:-/workspace/kraken-ltx-comfy}"
 BUILDER="${BUILDER:-kaniko}"
 KANIKO_IMAGE="${KANIKO_IMAGE:-ghcr.io/mrgheek/kaniko-executor:debug}"
 
-apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar
+for cmd in git curl tar; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar
+    break
+  fi
+done
 
 if [ ! -d "$REPO_DIR/.git" ]; then
   mkdir -p "$(dirname "$REPO_DIR")"

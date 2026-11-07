@@ -91,6 +91,7 @@ async function pickOffer() {
   const data = await vast(`/bundles/?q=${q}`);
   const offers = (data?.offers ?? [])
     .filter((o) => (o.reliability ?? 0) >= 0.98 && (o.inet_up ?? 0) >= 300)
+    .filter((o) => !/V100/i.test(o.gpu_name ?? ""))
     .sort((a, b) => a.dph_total - b.dph_total);
   if (offers.length === 0) throw new Error("No suitable builder offers");
   return offers[0];
@@ -101,9 +102,8 @@ set -euo pipefail
 trap 'echo "BUILD_STATUS=failure $(date -u +%FT%TZ)"' ERR
 mkdir -p /workspace
 cd /workspace
-apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates python3
-python3 -m http.server ${PORT} --directory /workspace >/workspace/http.log 2>&1 &
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates
 exec > >(tee -a /workspace/build.log) 2>&1
 echo "BUILD_START $(date -u +%FT%TZ)"
 rm -rf /workspace/kraken-ltx-comfy
