@@ -66,11 +66,9 @@ fi
 
 # kaniko does not need a daemon or user namespaces. The amd64 executor is
 # published as a release asset so Vast hosts never need gcr.io access.
-KANIKO_URL="${KANIKO_URL:-https://github.com/MrGheek/kraken-ltx-comfy/releases/download/tools-v1/kaniko-executor}"
 if [ ! -x /usr/local/bin/kaniko ]; then
-  echo "[build] downloading kaniko executor"
-  curl -fL --retry 3 --max-time 300 -o /usr/local/bin/kaniko "$KANIKO_URL"
-  chmod +x /usr/local/bin/kaniko
+  echo "[build] installing kaniko from repo"
+  install -m 0755 "$REPO_DIR/tools/kaniko-executor" /usr/local/bin/kaniko
 fi
 
 echo "[build] docker config (redacted):"
