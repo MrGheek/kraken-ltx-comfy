@@ -18,6 +18,7 @@ IMAGE="${IMAGE:-ghcr.io/mrgheek/kraken-ltx-comfy:latest}"
 REPO="${REPO:-https://github.com/MrGheek/kraken-ltx-comfy.git}"
 REPO_DIR="${REPO_DIR:-/workspace/kraken-ltx-comfy}"
 BUILDER="${BUILDER:-kaniko}"
+KANIKO_IMAGE="${KANIKO_IMAGE:-ghcr.io/mrgheek/kaniko-executor:debug}"
 
 apt-get update -qq
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git curl ca-certificates tar
@@ -67,7 +68,8 @@ if [ ! -x /usr/local/bin/kaniko ]; then
   fi
   rm -rf /tmp/kaniko-root
   mkdir -p /tmp/kaniko-root
-  /usr/local/bin/crane export gcr.io/kaniko-project/executor:debug - \
+  export DOCKER_CONFIG=/kaniko/.docker
+  /usr/local/bin/crane export "$KANIKO_IMAGE" - \
     | tar -xf - -C /tmp/kaniko-root
   EXECUTOR="$(find /tmp/kaniko-root -type f -name executor | head -1)"
   if [ -z "$EXECUTOR" ]; then
