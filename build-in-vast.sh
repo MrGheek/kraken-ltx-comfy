@@ -68,15 +68,11 @@ fi
 # published as a release asset so Vast hosts never need gcr.io access.
 TOOLS_TGZ_URL="${TOOLS_TGZ_URL:-https://codeload.github.com/MrGheek/kraken-tools/tar.gz/refs/heads/main}"
 if [ ! -x /usr/local/bin/kaniko ]; then
-  echo "[build] waiting for kaniko upload"
-  for _ in $(seq 1 60); do
-    [ -x /usr/local/bin/kaniko ] && break
-    sleep 5
-  done
-fi
-if [ ! -x /usr/local/bin/kaniko ]; then
-  echo "KANIKO_MISSING"
-  exit 1
+  echo "[build] downloading kaniko from GitHub Pages"
+  curl -fL --retry 2 --max-time 180 -o /tmp/kaniko.gz \
+    https://mrgheek.github.io/kraken-tools/kaniko-executor.gz || { echo "KANIKO_DOWNLOAD_FAILED"; exit 1; }
+  gunzip -c /tmp/kaniko.gz > /usr/local/bin/kaniko || { echo "KANIKO_GUNZIP_FAILED"; exit 1; }
+  chmod +x /usr/local/bin/kaniko
 fi
 
 echo "[build] docker config (redacted):"
