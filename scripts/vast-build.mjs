@@ -179,10 +179,13 @@ for (const candidate of offers) {
     created = await vast(`/asks/${candidate.id}/`, {
       method: "PUT",
       body: JSON.stringify({
-        image: "buildpack-deps:bookworm-scm",
+        image: "ghcr.io/mrgheek/kraken-builder:latest",
         disk: DISK_GB,
         onstart,
         env: { GHCR_USER, GHCR_TOKEN, HF_TOKEN, IMAGE },
+        docker_login_repo: "ghcr.io",
+        docker_login_user: GHCR_USER,
+        docker_login_pass: GHCR_TOKEN,
         ports: { [`${PORT}/http`]: PORT },
       }),
     });
